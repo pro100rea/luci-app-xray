@@ -33,7 +33,7 @@ jobs:
 
       - name: Prepare Cache Key
         id: cache_key
-        run: echo "::set-output name=timestamp::$(date +"%s")"
+        run: echo "timestamp=$(date +"%s")" >> $GITHUB_OUTPUT
 
       - name: Setup Cache
         uses: actions/cache@v4
@@ -46,7 +46,8 @@ jobs:
             openwrt-${{ matrix.arch }}-${{ env.PACKAGE_NAME }}-
       - name: Install Dependencies
         run: |
-          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y ccache gettext libncurses5-dev xsltproc p7zip-full
+          DEBIAN_FRONTEND=noninteractive sudo apt-get update
+          sudo apt-get install -y ccache gettext libncurses5-dev xsltproc p7zip-full zstd
       - name: Create Directories
         run: |
           CACHE_DIR_SDK="$(eval echo "$CACHE_DIR/sdk")"
@@ -78,8 +79,8 @@ jobs:
             fi
           fi
           cd -
-          file "$CACHE_DIR_SDK/$SDK_FILE"
-          7z x "$CACHE_DIR_SDK/$SDK_FILE" -so | tar -C "$SDK_HOME" -xvf - --strip=1
+          # Распаковка SDK с использованием tar и zstd
+          tar -I zstd -xf "$CACHE_DIR_SDK/$SDK_FILE" -C "$SDK_HOME" --strip-components=1
           cd "$SDK_HOME"
           test -d "dl" && rm -rf "dl" || true
           test -d "feeds" && rm -rf "feeds" || true

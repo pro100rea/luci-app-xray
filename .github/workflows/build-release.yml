@@ -15,9 +15,9 @@ jobs:
         target:
           - x86-64-24.10.1
           - x86-generic-24.10.1
-          - aarch64-cortex-a72-24.10.1
+          - aarch64_cortex-a72-24.10.1      # Исправлено: используйте подчеркивание
+          - mips_24kc-24.10.1                # Исправлено: mips_24kc (без дефиса)
           - ramips-mt7621-24.10.1
-          - mips-24kc-24.10.1
     
     container:
       image: ghcr.io/openwrt/imagebuilder:${{ matrix.target }}
@@ -28,22 +28,33 @@ jobs:
         with:
           path: luci-app-xray
       
-      - name: Setup ImageBuilder
+      - name: Setup ImageBuilder (for 24.10+)
         run: |
+          # В версии 24.10 нужно запустить setup.sh для загрузки актуальных файлов [citation:7][citation:10]
           if [ -f ./setup.sh ]; then
-            echo "Running setup.sh..."
+            echo "Running setup.sh to download ImageBuilder..."
             ./setup.sh
           fi
+          
+          # Проверяем структуру
+          ls -la
       
       - name: Update feeds
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install luci-base
+          ./scripts/feeds install luci-compat
       
       - name: Copy package
         run: |
           mkdir -p package/luci-app-xray
           cp -r $GITHUB_WORKSPACE/luci-app-xray/* package/luci-app-xray/
+          
+          # Проверяем наличие Makefile
+          if [ ! -f package/luci-app-xray/Makefile ]; then
+            echo "ERROR: Makefile not found!"
+            exit 1
+          fi
       
       - name: Build package
         run: |
@@ -64,5 +75,3 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: artifacts/*.ipk
-          draft: false
-          prerelease: false

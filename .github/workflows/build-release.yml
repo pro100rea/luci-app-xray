@@ -1,42 +1,37 @@
-name: Build and Release
+name: Build IPK packages
 
 on:
   push:
-    tags:
-      - 'v*'  # Запускается при пуше тега, начинающегося с v (например, v3.7.0)
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   build:
-    name: Build IPK packages
     runs-on: ubuntu-latest
-    
+    container:
+      image: openwrtorg/imagebuilder:x86-64-openwrt-23.05.3
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Setup build environment
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
-      
-      - name: Build packages
-        run: |
-          # Здесь должна быть команда сборки из оригинального репозитория
-          # Обычно это что-то вроде:
-          make
-      
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ipk-packages
-          path: ./*.ipk
-      
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: ./*.ipk
-          draft: false
-          prerelease: false
-          generate_release_notes: true
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Update feeds
+      run: |
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Copy package to build system
+      run: |
+        # Копируем ваш пакет в директорию package системы сборки
+        cp -r $GITHUB_WORKSPACE/* package/your-package-name/
+
+    - name: Build package
+      run: |
+        make package/your-package-name/compile V=s
+
+    - name: Upload IPK packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: ipk-packages
+        path: bin/packages/**/*.ipk

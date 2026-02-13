@@ -8,19 +8,8 @@ on:
 
 jobs:
   build:
-    name: Build for ${{ matrix.target }}
+    name: Build IPK for OpenWrt 24.10.1 (ARMv8)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - x86-64-24.10.1
-          - x86-generic-24.10.1
-          - aarch64_cortex-a72-24.10.1      # Исправлено: используйте подчеркивание
-          - mips_24kc-24.10.1                # Исправлено: mips_24kc (без дефиса)
-          - ramips-mt7621-24.10.1
-    
-    container:
-      image: ghcr.io/openwrt/imagebuilder:${{ matrix.target }}
     
     steps:
       - name: Checkout code
@@ -28,50 +17,89 @@ jobs:
         with:
           path: luci-app-xray
       
-      - name: Setup ImageBuilder (for 24.10+)
+      - name: Download OpenWrt ImageBuilder for ARMv8
         run: |
-          # В версии 24.10 нужно запустить setup.sh для загрузки актуальных файлов [citation:7][citation:10]
-          if [ -f ./setup.sh ]; then
-            echo "Running setup.sh to download ImageBuilder..."
-            ./setup.sh
-          fi
+          VERSION="24.10.1"
+          TARGET="armsr/armv8"
           
-          # Проверяем структуру
-          ls -la
+          # Формируем URL для скачивания
+          URL="https://downloads.openwrt.org/releases/$VERSION/targets/$TARGET/openwrt-imagebuilder-$VERSION-armsr-armv8.Linux-x86_64.tar.zst"
+          
+          echo "Downloading from: $URL"
+          wget -O imagebuilder.tar.zst "$URL"
+          
+          # Устанавливаем zstd если нужно
+          sudo apt-get update
+          sudo apt-get install -y zstd
+          
+          # Распаковываем
+          tar -I zstd -xf imagebuilder.tar.zst
+          
+          # Переименовываем для удобства
+          mv openwrt-imagebuilder-* imagebuilder
+          
+          echo "ImageBuilder downloaded and extracted"
+          ls -la imagebuilder/
       
-      - name: Update feeds
+      - name: Configure ImageBuilder
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install luci-base
-          ./scripts/feeds install luci-compat
-      
-      - name: Copy package
-        run: |
+          cd imagebuilder
+          
+          # Копируем наш пакет в систему сборки
           mkdir -p package/luci-app-xray
           cp -r $GITHUB_WORKSPACE/luci-app-xray/* package/luci-app-xray/
           
-          # Проверяем наличие Makefile
-          if [ ! -f package/luci-app-xray/Makefile ]; then
-            echo "ERROR: Makefile not found!"
-            exit 1
-          fi
+          # Проверяем структуру пакета
+          echo "Package structure:"
+          ls -la package/luci-app-xray/
+          
+          # Обновляем фиды (репозитории пакетов)
+          ./scripts/feeds update -a
+          ./scripts/feeds install luci-base
+          ./scripts/feeds install luci-compat
+          ./scripts/feeds install luci-lib-jsonc
       
       - name: Build package
         run: |
+          cd imagebuilder
+          
+          # Создаем конфигурацию по умолчанию
           make defconfig
+          
+          # Собираем пакет
+          echo "Building package/luci-app-xray..."
           make package/luci-app-xray/compile V=s
           
-          mkdir -p artifacts
-          find bin -name "*.ipk" -exec cp {} artifacts/ \;
+          # Создаем директорию для артефактов
+          mkdir -p $GITHUB_WORKSPACE/artifacts
+          
+          # Ищем все .ipk файлы
+          echo "Searching for IPK files..."
+          find bin -name "*.ipk" -type f | tee /tmp/found_ipks.txt
+          
+          # Копируем найденные файлы
+          while IFS= read -r file; do
+            cp "$file" $GITHUB_WORKSPACE/artifacts/
+            echo "Copied: $file"
+          done < /tmp/found_ipks.txt
+          
+          # Показываем результаты
+          echo "Artifacts directory contents:"
+          ls -la $GITHUB_WORKSPACE/artifacts/
       
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ipk-${{ matrix.target }}
+          name: ipk-packages-armv8-24.10.1
           path: artifacts/*.ipk
+          if-no-files-found: warn
       
       - name: Create Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: artifacts/*.ipk
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: false

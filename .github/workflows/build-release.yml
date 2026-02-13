@@ -1,4 +1,4 @@
-name: OpenWrt IPK Ultra Stable Build
+name: Build luci-app-xray for armv8
 
 on:
   push:
@@ -9,161 +9,35 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: armsr
-            subtarget: armv8
-            arch: armv8
-          - target: x86
-            subtarget: 64
-            arch: x86_64
+    name: Build for armv8
 
     steps:
-
-      # =====================================================
-      # Checkout repository
-      # =====================================================
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      # =====================================================
-      # Detect package name automatically
-      # =====================================================
-      - name: Detect package name
-        id: pkg
-        run: |
-          PKG=$(grep "^PKG_NAME:=" Makefile | cut -d= -f2)
-          if [ -z "$PKG" ]; then
-            echo "PKG_NAME not found in Makefile"
-            exit 1
-          fi
-          echo "Detected package: $PKG"
-          echo "name=$PKG" >> $GITHUB_OUTPUT
-
-      # =====================================================
-      # Install build dependencies
-      # =====================================================
-      - name: Install dependencies
+      - name: Setup build environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential clang flex bison g++ gawk \
-            gettext git libncurses5-dev libssl-dev \
-            python3 rsync unzip zlib1g-dev file \
-            wget curl zstd
+          sudo apt-get install -y build-essential git wget
 
-      # =====================================================
-      # Detect latest OpenWrt version (ULTRA STABLE)
-      # =====================================================
-      - name: Detect latest OpenWrt
-        id: owrt
+      - name: Build IPK
         run: |
-          VERSION=$(curl -sI https://downloads.openwrt.org/releases/ \
-            | grep -i location \
-            | sed -E 's#.*/releases/([0-9.]+)/#\1#')
-
-          if [ -z "$VERSION" ]; then
-            echo "Failed to detect OpenWrt version"
-            exit 1
-          fi
-
-          echo "Latest OpenWrt version: $VERSION"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      # =====================================================
-      # Locate SDK automatically
-      # =====================================================
-      - name: Locate SDK
-        id: sdk
-        run: |
-          BASE_URL="https://downloads.openwrt.org/releases/${{ steps.owrt.outputs.version }}/targets/${{ matrix.target }}/${{ matrix.subtarget }}"
-
-          echo "Searching SDK at:"
-          echo "$BASE_URL"
-
-          SDK=$(curl -s $BASE_URL/ \
-            | grep -oP 'href="\Kopenwrt-sdk-[^"]+Linux-x86_64\.tar\.zst' \
-            | head -n1)
-
-          if [ -z "$SDK" ]; then
-            echo "SDK not found!"
-            exit 1
-          fi
-
-          echo "SDK file: $SDK"
-          echo "url=$BASE_URL/$SDK" >> $GITHUB_OUTPUT
-
-      # =====================================================
-      # Download SDK
-      # =====================================================
-      - name: Download SDK
-        run: |
-          wget "${{ steps.sdk.outputs.url }}" -O sdk.tar.zst
-          tar -I zstd -xf sdk.tar.zst
-          mv openwrt-sdk-* sdk
-
-      # =====================================================
-      # Cache toolchain (BIG SPEED BOOST)
-      # =====================================================
-      - name: Cache OpenWrt toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            sdk/dl
-            sdk/staging_dir
-          key: openwrt-${{ steps.owrt.outputs.version }}-${{ matrix.arch }}
-
-      # =====================================================
-      # Prepare SDK
-      # =====================================================
-      - name: Prepare SDK
-        run: |
-          cd sdk
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
-          # копируем пакет в SDK
-          cp -r $GITHUB_WORKSPACE package/
-
-      # =====================================================
-      # Configure build
-      # =====================================================
-      - name: Configure build
-        run: |
-          cd sdk
-          echo "CONFIG_PACKAGE_${{ steps.pkg.outputs.name }}=m" >> .config
-          make defconfig
-
-      # =====================================================
-      # Compile package
-      # =====================================================
-      - name: Compile
-        run: |
-          cd sdk
-          make package/${{ steps.pkg.outputs.name }}/compile -j$(nproc) V=s
-
-      # =====================================================
-      # Collect IPK
-      # =====================================================
-      - name: Collect artifacts
-        run: |
-          mkdir artifacts
-          find sdk/bin/packages -name "*.ipk" -exec cp {} artifacts/ \;
+          # Клонируем оригинальный репозиторий со скриптами сборки
+          git clone https://github.com/yichya/luci-app-xray.git builder
+          cd builder
+          # Копируем наш код поверх (чтобы взять последнюю версию)
+          cp -r $GITHUB_WORKSPACE/* ./
+          # Запускаем скрипт сборки для armv8
+          make
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ipk-${{ matrix.arch }}
-          path: artifacts/*.ipk
+          name: ipk-packages
+          path: ./*.ipk
 
-      # =====================================================
-      # Create GitHub Release
-      # =====================================================
-      - name: Publish Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: artifacts/*.ipk
+          files: ./*.ipk

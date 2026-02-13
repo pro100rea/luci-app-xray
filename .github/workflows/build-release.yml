@@ -1,83 +1,63 @@
-name: Build and Release
+name: Build and Release for OpenWrt 24.10.1
 
 on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:  # Ручной запуск
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build IPK packages
+    name: Build for ${{ matrix.target }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86-64-24.10.1
+          - x86-generic-24.10.1
+          - aarch64-cortex-a72-24.10.1
+          - ramips-mt7621-24.10.1
+          - mips-24kc-24.10.1
+    
     container:
-      image: openwrtorg/imagebuilder:x86-64-openwrt-23.05.3
+      image: ghcr.io/openwrt/imagebuilder:${{ matrix.target }}
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           path: luci-app-xray
-          fetch-depth: 0
       
-      - name: Prepare build environment
+      - name: Setup ImageBuilder
         run: |
-          # Обновляем feeds для получения зависимостей
+          if [ -f ./setup.sh ]; then
+            echo "Running setup.sh..."
+            ./setup.sh
+          fi
+      
+      - name: Update feeds
+        run: |
           ./scripts/feeds update -a
           ./scripts/feeds install luci-base
-          ./scripts/feeds install luci-compat
-          ./scripts/feeds install luci-lib-jsonc
-          
-          # Создаем директорию для нашего пакета
+      
+      - name: Copy package
+        run: |
           mkdir -p package/luci-app-xray
-          
-          # Копируем исходники пакета
           cp -r $GITHUB_WORKSPACE/luci-app-xray/* package/luci-app-xray/
-          
-          # Проверяем структуру
-          ls -la package/luci-app-xray/
       
       - name: Build package
         run: |
-          # Конфигурация по умолчанию
           make defconfig
-          
-          # Сборка пакета
           make package/luci-app-xray/compile V=s
           
-          # Если пакет не собирается, пробуем альтернативный способ
-          if [ $? -ne 0 ]; then
-            echo "Trying alternative build method..."
-            make package/luci-app-xray/{clean,compile} V=s
-          fi
-      
-      - name: Find IPK files
-        run: |
           mkdir -p artifacts
-          
-          # Поиск собранных IPK файлов
-          echo "Searching for IPK files..."
-          find bin -name "*.ipk" -type f | tee found_ipks.txt
-          
-          # Копируем найденные файлы
-          while IFS= read -r file; do
-            cp "$file" artifacts/
-            echo "Copied: $file"
-          done < found_ipks.txt
-          
-          # Если ничего не найдено, показываем структуру директорий
-          if [ ! "$(ls -A artifacts)" ]; then
-            echo "No IPK files found. Showing directory structure:"
-            ls -la bin/
-            ls -la bin/packages/ || true
-          fi
+          find bin -name "*.ipk" -exec cp {} artifacts/ \;
       
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ipk-packages
+          name: ipk-${{ matrix.target }}
           path: artifacts/*.ipk
-          if-no-files-found: warn
       
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -86,5 +66,3 @@ jobs:
           files: artifacts/*.ipk
           draft: false
           prerelease: false
-          generate_release_notes: true
-          fail_on_unmatched_files: false

@@ -1,4 +1,4 @@
-name: Build and Release for OpenWrt 24.10.1 (ARMv8)
+name: Build IPK for OpenWrt 24.10.1 (ARMv8)
 
 on:
   push:
@@ -8,83 +8,109 @@ on:
 
 jobs:
   build:
-    name: Build IPK for ARMv8
     runs-on: ubuntu-latest
-    
+
+    env:
+      VERSION: "24.10.1"
+      TARGET: "armsr"
+      SUBTARGET: "armv8"
+      SDK_SUFFIX: "armsr-armv8"
+
     steps:
-      - name: Checkout code
+      - name: Checkout package
         uses: actions/checkout@v4
         with:
           path: luci-app-xray
-      
-      - name: Download OpenWrt ImageBuilder for ARMv8
+
+      # =============================
+      # Install build dependencies
+      # =============================
+      - name: Install dependencies
         run: |
-          VERSION="24.10.1"
-          TARGET="armsr/armv8"
-          SUFFIX="armsr-armv8"
-          
-          URL="https://downloads.openwrt.org/releases/$VERSION/targets/$TARGET/openwrt-imagebuilder-$VERSION-$SUFFIX.Linux-x86_64.tar.zst"
-          
-          echo "Downloading from: $URL"
-          wget -O imagebuilder.tar.zst "$URL" || {
-            echo "Trying .xz format..."
-            URL_XZ="https://downloads.openwrt.org/releases/$VERSION/targets/$TARGET/openwrt-imagebuilder-$VERSION-$SUFFIX.Linux-x86_64.tar.xz"
-            wget -O imagebuilder.tar.xz "$URL_XZ"
-          }
-          
           sudo apt-get update
-          sudo apt-get install -y zstd
-          
-          if [ -f imagebuilder.tar.zst ]; then
-            tar -I zstd -xf imagebuilder.tar.zst
-          else
-            tar -xf imagebuilder.tar.xz
-          fi
-          
-          EXTRACTED_DIR=$(ls -d openwrt-imagebuilder-* | head -n1)
-          mv "$EXTRACTED_DIR" imagebuilder
-          
-          echo "ImageBuilder contents:"
-          ls -la imagebuilder/
-          
-          # Критическая проверка
-          if [ ! -f imagebuilder/scripts/feeds ]; then
-            echo "ERROR: scripts/feeds not found. Download failed or wrong URL."
-            exit 1
-          fi
-      
-      - name: Configure ImageBuilder
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            flex \
+            bison \
+            g++ \
+            gawk \
+            gcc-multilib \
+            gettext \
+            git \
+            libncurses5-dev \
+            libssl-dev \
+            python3 \
+            rsync \
+            unzip \
+            zlib1g-dev \
+            file \
+            wget \
+            zstd
+
+      # =============================
+      # Download OpenWrt SDK
+      # =============================
+      - name: Download OpenWrt SDK
         run: |
-          cd imagebuilder
-          
-          # Копируем наш пакет
+          URL="https://downloads.openwrt.org/releases/${VERSION}/targets/${TARGET}/${SUBTARGET}/openwrt-sdk-${VERSION}-${SDK_SUFFIX}_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+
+          echo "Downloading $URL"
+          wget $URL -O sdk.tar.zst
+
+          tar -I zstd -xf sdk.tar.zst
+
+          DIR=$(ls -d openwrt-sdk-*)
+          mv $DIR sdk
+
+          ls sdk
+
+      # =============================
+      # Prepare feeds + package
+      # =============================
+      - name: Prepare SDK
+        run: |
+          cd sdk
+
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
           mkdir -p package/luci-app-xray
           cp -r $GITHUB_WORKSPACE/luci-app-xray/* package/luci-app-xray/
-          
-          echo "Package structure:"
-          ls -la package/luci-app-xray/
-          
-          # Обновляем feeds
-          ./scripts/feeds update -a
-          ./scripts/feeds install luci-base
-          ./scripts/feeds install luci-compat
-      
-      - name: Build package
+
+      # =============================
+      # Configure build
+      # =============================
+      - name: Configure
         run: |
-          cd imagebuilder
-          
+          cd sdk
           make defconfig
-          make package/luci-app-xray/compile V=s
-          
-          mkdir -p $GITHUB_WORKSPACE/artifacts
-          find bin -name "*.ipk" -exec cp {} $GITHUB_WORKSPACE/artifacts/ \;
-      
+
+      # =============================
+      # Build package
+      # =============================
+      - name: Compile package
+        run: |
+          cd sdk
+          make package/luci-app-xray/compile V=s -j$(nproc)
+
+      # =============================
+      # Collect artifacts
+      # =============================
+      - name: Collect IPK
+        run: |
+          mkdir -p artifacts
+          find sdk/bin/packages -name "*.ipk" -exec cp {} artifacts/ \;
+
+          echo "Built packages:"
+          ls artifacts
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ipk-armv8-24.10.1
           path: artifacts/*.ipk
-      
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
